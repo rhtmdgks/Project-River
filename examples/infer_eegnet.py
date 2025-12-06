@@ -1,13 +1,5 @@
 #!/usr/bin/env python3
-"""
-Project River - EEGNet Inference Example
-
-Run inference on a single CSV file and predict the Jamo class.
-
-Usage:
-    python examples/infer_eegnet.py --file data/raw/ㄱ/mindMonitor_xxx.csv
-    python examples/infer_eegnet.py --file data/raw/ㄴ/session.csv --checkpoint checkpoints/best_eegnet.pth
-"""
+"""Run inference on a single CSV file."""
 
 import argparse
 import sys
@@ -17,127 +9,71 @@ from pathlib import Path
 import numpy as np
 import torch
 
-# Add project root to path
-PROJECT_ROOT = Path(__file__).parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from src.river.config import config
+from src.river.data_loader import load_session
+from src.river.evaluate import load_model
+from src.river.preprocessing import normalize
+from src.river.train import get_device
 
 
-def parse_args() -> argparse.Namespace:
-    """Parse command line arguments."""
-    parser = argparse.ArgumentParser(
-        description="Run EEGNet inference on a single CSV file",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-    )
-    parser.add_argument(
-        "--file",
-        type=str,
-        required=True,
-        help="Path to input CSV file",
-    )
-    parser.add_argument(
-        "--checkpoint",
-        type=str,
-        default="checkpoints/best_eegnet.pth",
-        help="Path to model checkpoint",
-    )
-    return parser.parse_args()
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--file", required=True, help="Path to CSV file")
+    parser.add_argument("--checkpoint", default="checkpoints/best_eegnet.pth")
+    args = parser.parse_args()
 
-
-def main() -> None:
-    """Main inference function."""
-    args = parse_args()
-
-    from src.river.config import default_config
-    from src.river.data_loader import load_session_csv
-    from src.river.evaluate import load_model
-    from src.river.preprocessing import normalize_features
-    from src.river.train import get_device
-
-    print("=" * 60)
-    print("Project River - EEGNet Inference")
-    print("=" * 60)
-
-    # Check file exists
     input_file = Path(args.file)
+    checkpoint = Path(args.checkpoint)
+
     if not input_file.exists():
-        print(f"\nERROR: File not found: {input_file}")
+        print(f"File not found: {input_file}")
+        return
+    if not checkpoint.exists():
+        print(f"Checkpoint not found: {checkpoint}")
         return
 
-    # Check checkpoint exists
-    checkpoint_path = Path(args.checkpoint)
-    if not checkpoint_path.exists():
-        print(f"\nERROR: Checkpoint not found: {checkpoint_path}")
-        print("Run training first: python examples/train_eegnet.py")
-        return
-
-    # Device
     device = get_device()
-    print(f"\nDevice: {device}")
+    print(f"Device: {device}")
 
-    # Load model
-    print(f"\n[Loading Model]")
-    print(f"  Checkpoint: {checkpoint_path}")
-    model, config = load_model(checkpoint_path, device)
+    model, cfg = load_model(checkpoint, device)
+    print(f"Loaded model (window={cfg['window_size']}s)")
 
-    window_size = config["window_size"]
-    stride = config["stride"]
-    print(f"  Window: {window_size}s, Stride: {stride}s")
-
-    # Load and preprocess input file
-    print(f"\n[Loading Input]")
-    print(f"  File: {input_file}")
-
-    # Use dummy label (0) since we're just doing inference
-    X, _ = load_session_csv(
-        input_file,
-        label=0,
-        window_size=window_size,
-        stride=stride,
-    )
+    # Load and preprocess
+    X, _ = load_session(input_file, label=0, window_size=cfg["window_size"], stride=cfg["stride"])
 
     if len(X) == 0:
-        print(f"  ERROR: No windows generated from file")
-        print(f"  File may be too short for window_size={window_size}s")
+        print(f"No windows generated (file too short for {cfg['window_size']}s window)")
         return
 
-    print(f"  Generated {len(X)} windows")
-    print(f"  Shape: {X.shape}")
+    print(f"Generated {len(X)} windows")
 
-    # Normalize
-    X_norm, _ = normalize_features(X, method="zscore")
-
-    # Convert to tensor: (N, T, C) -> (N, 1, T, C)
-    X_tensor = torch.from_numpy(X_norm).unsqueeze(1).float().to(device)
+    X, _ = normalize(X)
+    X_tensor = torch.from_numpy(X).unsqueeze(1).float().to(device)
 
     # Inference
-    print(f"\n[Inference]")
-    model.eval()
     with torch.no_grad():
         logits = model(X_tensor)
         probs = torch.softmax(logits, dim=1)
-        preds = torch.argmax(logits, dim=1).cpu().numpy()
+        preds = logits.argmax(1).cpu().numpy()
 
-    # Count predictions
-    pred_counts = Counter(preds)
-    most_common_label = pred_counts.most_common(1)[0][0]
-    most_common_jamo = default_config.get_jamo_from_label(most_common_label)
+    # Results
+    counts = Counter(preds)
+    print("\nPredictions:")
+    for label, count in sorted(counts.items()):
+        jamo = config.get_jamo(label)
+        print(f"  {jamo}: {count} windows ({count/len(preds)*100:.1f}%)")
 
-    print(f"\n[Results]")
-    print(f"  Predictions per window:")
-    for label, count in sorted(pred_counts.items()):
-        jamo = default_config.get_jamo_from_label(label)
-        pct = count / len(preds) * 100
-        print(f"    {jamo} (label={label}): {count} windows ({pct:.1f}%)")
+    # Final prediction
+    top_label = counts.most_common(1)[0][0]
+    top_jamo = config.get_jamo(top_label)
+    avg_probs = probs.mean(0).cpu().numpy()
+    conf_label = avg_probs.argmax()
+    conf_jamo = config.get_jamo(conf_label)
 
-    print(f"\n  ★ Final Prediction: {most_common_jamo} (label={most_common_label})")
-
-    # Average confidence
-    avg_probs = probs.mean(dim=0).cpu().numpy()
-    top_idx = np.argmax(avg_probs)
-    top_jamo = default_config.get_jamo_from_label(top_idx)
-    print(f"  ★ By Avg Confidence: {top_jamo} ({avg_probs[top_idx]:.4f})")
-
-    print("\n" + "=" * 60)
+    print(f"\nPrediction (majority): {top_jamo}")
+    print(f"Prediction (confidence): {conf_jamo} ({avg_probs[conf_label]:.3f})")
 
 
 if __name__ == "__main__":

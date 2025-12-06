@@ -1,9 +1,3 @@
-"""
-Project River - PyTorch Datasets
+from .eeg_dataset import EEGDataset, train_val_split
 
-Dataset classes for EEG Jamo classification.
-"""
-
-from .eeg_dataset import EEGJamoDataset, train_val_split
-
-__all__ = ["EEGJamoDataset", "train_val_split"]
+__all__ = ["EEGDataset", "train_val_split"]
