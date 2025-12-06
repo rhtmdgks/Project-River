@@ -1,0 +1,27 @@
+# Project River Dependencies
+# Python 3.10 required
+
+# Core data processing
+numpy>=1.24.0
+pandas>=2.0.0
+
+# Scientific computing
+scipy>=1.10.0
+
+# Machine learning
+scikit-learn>=1.3.0
+torch>=2.0.0
+
+# Visualization
+matplotlib>=3.7.0
+seaborn>=0.12.0
+
+# Jupyter notebooks
+jupyter>=1.0.0
+ipykernel>=6.0.0
+
+# Development tools
+tqdm>=4.65.0
+
+# Optional: EEG-specific libraries (uncomment when needed)
+# mne>=1.4.0
